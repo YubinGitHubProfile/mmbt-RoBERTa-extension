@@ -23,7 +23,7 @@ Paper Link: https://arxiv.org/abs/1909.02950
 
 train.py provides the common training pipeline for all datasets. 
 - **task**: mmimdb, food101, vsnli
-- **model**: bow, img, concatbow, bert, concatbert, mmbt
+- **model**: bow, img, concatbow, bert, concatbert, mmbt (updated in this fork)
 
 The following paths need to be set to start training.
 

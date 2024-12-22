@@ -10,6 +10,7 @@
 import torch
 import torch.nn as nn
 from pytorch_pretrained_bert.modeling import BertModel
+from transformers import RobertaModel
 
 from mmbt.models.image import ImageEncoder
 
@@ -20,7 +21,11 @@ class ImageBertEmbeddings(nn.Module):
         self.args = args
         self.img_embeddings = nn.Linear(args.img_hidden_sz, args.hidden_sz)
         self.position_embeddings = embeddings.position_embeddings
-        self.token_type_embeddings = embeddings.token_type_embeddings
+        if args.bert_model != "roberta-base": # handle roberta-base embeddings (they are not token embeddings)
+            self.token_type_embeddings = embeddings.token_type_embeddings
+        else:
+            self.token_type_embeddings = None
+        # self.token_type_embeddings = embeddings.token_type_embeddings
         self.word_embeddings = embeddings.word_embeddings
         self.LayerNorm = embeddings.LayerNorm
         self.dropout = nn.Dropout(p=args.dropout)
@@ -28,14 +33,23 @@ class ImageBertEmbeddings(nn.Module):
     def forward(self, input_imgs, token_type_ids):
         bsz = input_imgs.size(0)
         seq_length = self.args.num_image_embeds + 2  # +2 for CLS and SEP Token
+        if self.args.bert_model == "roberta-base":
+            cls_id = torch.LongTensor([self.args.vocab.stoi["<s>"]]).cuda()
+            cls_id = cls_id.unsqueeze(0).expand(bsz, 1)
+            cls_token_embeds = self.word_embeddings(cls_id)
 
-        cls_id = torch.LongTensor([self.args.vocab.stoi["[CLS]"]]).cuda()
-        cls_id = cls_id.unsqueeze(0).expand(bsz, 1)
-        cls_token_embeds = self.word_embeddings(cls_id)
+            sep_id = torch.LongTensor([self.args.vocab.stoi["</s>"]]).cuda()
+            sep_id = sep_id.unsqueeze(0).expand(bsz, 1)
+            sep_token_embeds = self.word_embeddings(sep_id)
 
-        sep_id = torch.LongTensor([self.args.vocab.stoi["[SEP]"]]).cuda()
-        sep_id = sep_id.unsqueeze(0).expand(bsz, 1)
-        sep_token_embeds = self.word_embeddings(sep_id)
+        else:
+            cls_id = torch.LongTensor([self.args.vocab.stoi["[CLS]"]]).cuda()
+            cls_id = cls_id.unsqueeze(0).expand(bsz, 1)
+            cls_token_embeds = self.word_embeddings(cls_id)
+
+            sep_id = torch.LongTensor([self.args.vocab.stoi["[SEP]"]]).cuda()
+            sep_id = sep_id.unsqueeze(0).expand(bsz, 1)
+            sep_token_embeds = self.word_embeddings(sep_id)
 
         imgs_embeddings = self.img_embeddings(input_imgs)
         token_embeddings = torch.cat(
@@ -45,8 +59,15 @@ class ImageBertEmbeddings(nn.Module):
         position_ids = torch.arange(seq_length, dtype=torch.long).cuda()
         position_ids = position_ids.unsqueeze(0).expand(bsz, seq_length)
         position_embeddings = self.position_embeddings(position_ids)
-        token_type_embeddings = self.token_type_embeddings(token_type_ids)
-        embeddings = token_embeddings + position_embeddings + token_type_embeddings
+        # token_type_embeddings = self.token_type_embeddings(token_type_ids)
+        # embeddings = token_embeddings + position_embeddings + token_type_embeddings
+        ###############Added for Roberta####################
+        embeddings = token_embeddings + position_embeddings
+        # Add token type embeddings for non-RoBERTa models
+        if self.token_type_embeddings is not None:
+            token_type_embeddings = self.token_type_embeddings(token_type_ids)
+            embeddings += token_type_embeddings
+        ###############Added for Roberta####################     
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
@@ -56,8 +77,12 @@ class MultimodalBertEncoder(nn.Module):
     def __init__(self, args):
         super(MultimodalBertEncoder, self).__init__()
         self.args = args
-        bert = BertModel.from_pretrained(args.bert_model)
-        self.txt_embeddings = bert.embeddings
+        if args.bert_model == "roberta-base":
+          bert = RobertaModel.from_pretrained(args.bert_model)
+          self.txt_embeddings = bert.embeddings 
+        else:
+          bert = BertModel.from_pretrained(args.bert_model)
+          self.txt_embeddings = bert.embeddings
 
         if args.task == "vsnli":
             ternary_embeds = nn.Embedding(3, args.hidden_sz)
@@ -97,14 +122,27 @@ class MultimodalBertEncoder(nn.Module):
         )
         img = self.img_encoder(input_img)  # BxNx3x224x224 -> BxNx2048
         img_embed_out = self.img_embeddings(img, img_tok)
-        txt_embed_out = self.txt_embeddings(input_txt, segment)
+        if self.args.bert_model == "roberta-base":
+            txt_embed_out = self.txt_embeddings(input_txt)  # No segment tokens
+        else:
+            txt_embed_out = self.txt_embeddings(input_txt, segment)
         encoder_input = torch.cat([img_embed_out, txt_embed_out], 1)  # Bx(TEXT+IMG)xHID
-
-        encoded_layers = self.encoder(
-            encoder_input, extended_attention_mask, output_all_encoded_layers=False
-        )
-
-        return self.pooler(encoded_layers[-1])
+        if self.args.bert_model == "roberta-base":
+           outputs = self.encoder(
+                encoder_input, 
+                attention_mask=extended_attention_mask, 
+                output_hidden_states=True
+           )
+           encoded_layers = outputs.last_hidden_state
+           # print("encoded_layers shape:", encoded_layers.shape)
+           pooled_output = encoded_layers[:, 0, :]
+           return pooled_output  # Return all token embeddings
+        else:
+           encoded_layers = self.encoder(
+                encoder_input, extended_attention_mask, output_all_encoded_layers=False
+            )
+    
+           return self.pooler(encoded_layers[-1])
 
 
 class MultimodalBertClf(nn.Module):

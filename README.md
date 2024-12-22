@@ -1,5 +1,9 @@
 # MultiModal BiTransformers (MMBT)
 
+## Upldate in this FORK
+README.md, MMBT/models/mmbt.py, MMBT/train_with_RoBERTa.iynb
+
+# MMBT original Intro
 ## Introduction
 
 [MMBT](https://arxiv.org/abs/1909.02950) is the accompanying code repository for the paper titled, "Supervised Multimodal Bitransformers for Classifying Images and Text" by Douwe Kiela, Suvrat Bhooshan, Hamed Firooz, Ethan Perez and Davide Testuggine.
